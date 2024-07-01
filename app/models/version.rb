@@ -45,7 +45,7 @@ class Version < ApplicationRecord # rubocop:disable Metrics/ClassLength
   validates :description, :summary, :authors, :requirements, :cert_chain,
     length: { minimum: 0, maximum: Gemcutter::MAX_TEXT_FIELD_LENGTH },
     allow_blank: true
-  validates :sha256, :spec_sha256, format: { with: Patterns::BASE64_SHA256_PATTERN }, allow_nil: true
+  validates :sha256, :spec_sha256, :sigstore_jsonl_sha256, format: { with: Patterns::BASE64_SHA256_PATTERN }, allow_nil: true
 
   validates :number, :platform, :gem_platform, :full_name, :gem_full_name, :canonical_number,
     name_format: { requires_letter: false },
@@ -319,7 +319,8 @@ class Version < ApplicationRecord # rubocop:disable Metrics/ClassLength
       "licenses"                   => licenses,
       "requirements"               => requirements,
       "sha"                        => sha256_hex,
-      "spec_sha"                   => spec_sha256_hex
+      "spec_sha"                   => spec_sha256_hex,
+      "sigstore_sha"               => sigstore_jsonl_sha256_hex
     }
   end
 
@@ -383,6 +384,10 @@ class Version < ApplicationRecord # rubocop:disable Metrics/ClassLength
 
   def spec_sha256_hex
     Version._sha256_hex(spec_sha256) if spec_sha256
+  end
+
+  def sigstore_jsonl_sha256_hex
+    Version._sha256_hex(sigstore_jsonl_sha256) if sigstore_jsonl_sha256
   end
 
   def self._sha256_hex(raw)

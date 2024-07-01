@@ -6,19 +6,22 @@ class Pusher
 
   attr_reader :api_key, :owner, :spec, :spec_contents, :message, :code, :rubygem, :body, :version, :version_id, :size
 
-  def initialize(api_key, body, request: nil)
+  def initialize(api_key, body, request: nil, sigstore_json_body: nil)
     @api_key = api_key
     @owner = api_key.owner
     @scoped_rubygem = api_key.rubygem
 
     @body = StringIO.new(body.read)
+    @sigstore_filename = sigstore_json_body&.original_filename
+    @sigstore = sigstore_json_body.read if sigstore_json_body
+
     @size = @body.size
     @request = request
   end
 
   def process
     trace("gemcutter.pusher.process", tags: { "gemcutter.api_key.owner" => owner.to_gid }) do
-      pull_spec && find && authorize && verify_gem_scope && verify_mfa_requirement && validate && save
+      pull_spec && normalize_sigstore && find && authorize && verify_gem_scope && verify_mfa_requirement && validate && verify_sigstore && save
     end
   end
 
@@ -56,7 +59,7 @@ class Pusher
     # can clean things up well.
     return notify("There was a problem saving your gem: #{rubygem.all_errors(version)}", 403) unless update
     trace("gemcutter.pusher.write_gem") do
-      write_gem @body, @spec_contents
+      write_gem @body, @spec_contents, @sigstore
     end
   rescue ArgumentError => e
     @version&.destroy
@@ -93,6 +96,21 @@ class Pusher
     MSG
   end
 
+  def normalize_sigstore
+    return true unless @sigstore
+
+    case @sigstore_filename
+    when /\.sigstore\.json\z/
+      @sigstore = JSON.dump JSON.parse @sigstore
+    when /\.sigstore\.jsonl\z/
+      nil
+    else
+      return notify("Sigstore error: invalid filename #{@sigstore_filename}", 422)
+    end
+
+    true
+  end
+
   def find # rubocop:disable Metrics/AbcSize, Metrics/MethodLength
     name = spec.name.to_s
     set_tag "gemcutter.rubygem.name", name
@@ -101,6 +119,7 @@ class Pusher
 
     sha256 = Digest::SHA2.base64digest(body.string)
     spec_sha256 = Digest::SHA2.base64digest(spec_contents)
+    sigstore_jsonl_sha256 = Digest::SHA2.base64digest(@sigstore) if @sigstore
 
     version = @rubygem.versions
       .create_with(indexed: false, cert_chain: spec.cert_chain)
@@ -111,6 +130,7 @@ class Pusher
         size: size,
         sha256: sha256,
         spec_sha256: spec_sha256,
+        sigstore_jsonl_sha256: sigstore_jsonl_sha256,
         pusher: api_key.user,
         pusher_api_key: api_key
       )
@@ -243,18 +263,21 @@ class Pusher
   end
 
   # we validate that the version full_name == spec.original_name
-  def write_gem(body, spec_contents)
+  def write_gem(body, spec_contents, sigstore_bundle)
     gem_path = "gems/#{@version.gem_file_name}"
     gem_contents = body.string
 
     spec_path = "quick/Marshal.4.8/#{@version.full_name}.gemspec.rz"
+    sigstore_path = "sigstore/#{@version.gem_file_name}.sigstore.jsonl"
 
     # do all processing _before_ we upload anything to S3, so we lower the chances of orphaned files
     RubygemFs.instance.store(gem_path, gem_contents, checksum_sha256: version.sha256)
     RubygemFs.instance.store(spec_path, spec_contents, checksum_sha256: version.spec_sha256)
+    RubygemFs.instance.store(sigstore_path, sigstore_bundle, checksum_sha256: version.sigstore_jsonl_sha256) if sigstore_bundle
 
     Fastly.purge(path: gem_path)
     Fastly.purge(path: spec_path)
+    Fastly.purge(path: sigstore_path)
   end
 
   def log_pushing
@@ -305,5 +328,32 @@ class Pusher
   def find_pending_trusted_publisher
     return unless owner.class.module_parent_name == "OIDC::TrustedPublisher"
     owner.pending_trusted_publishers.unexpired.rubygem_name_is(rubygem.name).first
+  end
+
+  def verify_sigstore
+    return true unless @sigstore
+
+    unless OIDC::TrustedPublisher.all.any? { |t| @api_key.owner.is_a?(t) }
+      return notify("Pushing with a sigstore.json requires trusted publishing", 400)
+    end
+
+    policy = @api_key.owner.to_sigstore_identity_policy(@api_key.oidc_id_token.jwt.dig("claims", "ref"))
+    bundles = @sigstore.lines.map { |line| Sigstore::Bundle::V1::Bundle.decode_json(line, registry: Sigstore::REGISTRY) }
+    bundles.each do |bundle|
+      materials = Sigstore::VerificationMaterials.from_bundle(
+        input: @body,
+        bundle: bundle,
+        offline: false
+      )
+      sigstore_verification = sigstore_verifier.verify(materials:, policy:)
+      logger.info { { sigstore_verification: sigstore_verification, policy: policy } }
+      return notify("Sigstore error: #{sigstore_verification.reason}+\n#{policy.inspect}", 422) unless sigstore_verification.verified?
+    end
+
+    true
+  end
+
+  def sigstore_verifier
+    Sigstore::Verifier.production
   end
 end

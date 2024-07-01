@@ -225,6 +225,7 @@ class Rubygem < ApplicationRecord
       "yanked"             => version.yanked?,
       "sha"                => version.sha256_hex,
       "spec_sha"           => version.spec_sha256_hex,
+      "sigstore_sha"       => version.sigstore_jsonl_sha256_hex,
       "project_uri"        => "#{protocol}://#{host_with_port}/gems/#{name}",
       "gem_uri"            => "#{protocol}://#{host_with_port}/gems/#{version.gem_file_name}",
       "homepage_uri"       => versioned_links.homepage_uri,
