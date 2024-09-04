@@ -61,7 +61,7 @@ gem "faraday-multipart", "~> 1.0"
 gem "timescaledb", "~> 0.2"
 
 # Admin dashboard
-gem "avo", "~> 3.11"
+gem "avo", "~> 3.12"
 gem "pagy", "~> 8.4"
 gem "view_component", "~> 3.14"
 gem "pundit", "~> 2.4"
@@ -71,7 +71,7 @@ gem "dry-initializer", "~> 3.1"
 
 group :avo, optional: true do
   source "https://packager.dev/avo-hq/" do
-    gem "avo-advanced", "~> 3.11"
+    gem "avo-advanced", "~> 3.12"
   end
 end
 
