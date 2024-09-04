@@ -975,7 +975,3 @@ nl:
         api_key_gem_html:
         api_key_mfa:
         not_required:
-  access:
-    roles:
-      owner:
-      maintainer:
